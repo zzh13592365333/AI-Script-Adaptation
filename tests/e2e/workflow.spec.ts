@@ -1,0 +1,53 @@
+import { expect, test } from '@playwright/test'
+
+test('completes the five-stage mock workflow', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '载入示例' }).click()
+  await page.getByRole('button', { name: '分析原稿' }).click()
+  await page.getByRole('button', { name: '确认分析' }).click()
+
+  await page.locator('[data-stage="adaptation"]').click()
+  await page.getByRole('button', { name: '生成全部设定' }).click()
+  await page.getByRole('button', { name: '确认漫剧设定' }).click()
+
+  await page.locator('[data-stage="planning"]').click()
+  await page.getByRole('button', { name: '生成全剧规划' }).click()
+  await page.getByLabel('总集数').fill('3')
+  await expect(page.getByLabel('总集数')).toHaveValue('3')
+  await page.getByRole('button', { name: '确认全剧规划' }).click()
+
+  await page.locator('[data-stage="outlines"]').click()
+  await page.getByRole('button', { name: '生成全部大纲' }).click()
+  await expect(page.getByText('分集大纲已生成')).toBeVisible()
+  await expect(page.getByRole('button', { name: '确认全部大纲' })).toBeVisible()
+  await page.getByRole('button', { name: '确认本集' }).click()
+  await expect(page.getByRole('heading', { name: '分集大纲', level: 1 })).toBeVisible()
+  await expect(page.locator('.episode-list button.selected .episode-number')).toHaveText('02')
+
+  await page.locator('[data-stage="scripts"]').click()
+  await expect(page.getByRole('button', { name: '确认全部剧本' })).toBeVisible()
+  await page.getByRole('button', { name: '生成本集' }).click()
+  await expect(page.locator('.script-textarea')).toHaveValue(/第 1 集/)
+  await page.getByRole('button', { name: '确认全部剧本' }).click()
+  await expect(page.locator('[data-stage="scripts"]')).toContainText('已确认')
+  await page.getByRole('button', { name: '确认本集' }).click()
+  await expect(page.locator('.episode-list button.selected .episode-number')).toHaveText('02')
+  await expect(page.getByText('已生成剧本').locator('..')).toContainText('1 / 3')
+})
+
+test('marks planning dirty after an upstream setup edit', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '载入示例' }).click()
+  await page.getByRole('button', { name: '分析原稿' }).click()
+  await page.getByRole('button', { name: '确认分析' }).click()
+  await page.locator('[data-stage="adaptation"]').click()
+  await page.getByRole('button', { name: '生成全部设定' }).click()
+  await page.getByRole('button', { name: '确认漫剧设定' }).click()
+  await page.locator('[data-stage="planning"]').click()
+  await page.getByRole('button', { name: '生成全剧规划' }).click()
+  await page.getByRole('button', { name: '确认全剧规划' }).click()
+  await page.locator('[data-stage="adaptation"]').click()
+  await page.getByLabel('创作方向').fill('改为国风悬疑漫剧，加强雨夜与档案室的视觉表现')
+  await page.locator('[data-stage="planning"]').click()
+  await expect(page.getByRole('main').locator('.status-dirty')).toHaveText('需更新')
+})
