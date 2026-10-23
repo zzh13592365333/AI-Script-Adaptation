@@ -15,7 +15,7 @@ describe('prompt settings drawer', () => {
   })
 
   it('restores defaults and clears persisted overrides', async () => {
-    localStorage.setItem('ai-comic-workflow.prompts.v1', JSON.stringify({ sourceAnalysis: { userTemplate: '坏模板' } }))
+    localStorage.setItem('adaptation-workbench.prompts.v1', JSON.stringify({ sourceAnalysis: { userTemplate: '坏模板' } }))
     const wrapper = mount(PromptSettingsDrawer, { props: { open: true } })
     await wrapper.get('[data-test="restore-prompts"]').trigger('click')
     expect(localStorage.getItem('ai-comic-workflow.prompts.v1')).toBeNull()

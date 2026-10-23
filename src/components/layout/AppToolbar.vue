@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { Download, PanelRightOpen, RotateCcw, Settings, Upload } from 'lucide-vue-next'
+import { Download, FolderOpen, PanelRightOpen, RotateCcw, Settings, Upload } from 'lucide-vue-next'
 import { ref } from 'vue'
 import { useWorkflowStore } from '@/stores/workflow'
 
-const emit = defineEmits<{ settings: []; context: []; export: []; importProject: [file: File] }>()
+const emit = defineEmits<{ settings: []; context: []; export: []; records: []; importProject: [file: File] }>()
 const store = useWorkflowStore()
 const editing = ref(false)
 const draftName = ref(store.project.name)
@@ -21,6 +21,7 @@ function onImport(event: Event) { const file = (event.target as HTMLInputElement
     </div>
     <div class="toolbar-actions">
       <button class="icon-button mobile-only" title="上下文" @click="$emit('context')"><PanelRightOpen :size="18" /></button>
+      <button class="icon-button" title="项目记录" @click="$emit('records')"><FolderOpen :size="18" /></button>
       <label class="icon-button" title="导入项目"><Upload :size="18" /><input type="file" accept=".json" hidden @change="onImport" /></label>
       <button class="icon-button" title="导出项目" @click="$emit('export')"><Download :size="18" /></button>
       <button class="icon-button" title="新建项目" @click="store.resetProject"><RotateCcw :size="18" /></button>

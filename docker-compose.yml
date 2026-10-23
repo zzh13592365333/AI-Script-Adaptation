@@ -1,0 +1,51 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DATABASE_PATH: /app/data/tasks.sqlite3
+      CHECKPOINT_PATH: /app/data/checkpoints.sqlite3
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      MODEL_NAME: ${MODEL_NAME:-}
+      MODEL_REASONING_EFFORT: ${MODEL_REASONING_EFFORT:-low}
+      CORS_ORIGINS: '["http://localhost:8080"]'
+      MAX_CONCURRENT_TASKS: ${MAX_CONCURRENT_TASKS:-2}
+      MAX_INPUT_CHARS: ${MAX_INPUT_CHARS:-180000}
+      DEFAULT_MAX_RETRIES: ${DEFAULT_MAX_RETRIES:-2}
+    volumes:
+      - app-data:/app/data
+    restart: unless-stopped
+    init: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_AI_ADAPTER: http
+        VITE_SCRIPT_WORKFLOW: backend
+        VITE_API_BASE_URL: /api
+        VITE_BACKEND_API_URL: ""
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-8080}:80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
+
+volumes:
+  app-data:

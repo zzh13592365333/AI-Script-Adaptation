@@ -1,21 +1,26 @@
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
-import { createProject, type AdaptationSetup, type Project, type StageId } from '@/domain/project'
-import { markDirty, resizeEpisodes } from '@/domain/workflow'
+import { createProject, type AdaptationSetup, type EpisodeScript, type Project, type ReviewableStageId, type StageId } from '@/domain/project'
+import { canConfirmStage, canGenerate, markDirty, markStageChecked, recordStageVersion, resizeEpisodes } from '@/domain/workflow'
 import { createAiAdapter, type AiAdapter } from '@/features/ai'
 import { parseSource, sourceTextForAnalysis } from '@/features/files/parse-source'
-import { createDebouncedSaver, importProject, loadProject } from '@/features/project/persistence'
+import { createDebouncedSaver, deleteProject as deleteStoredProject, importProject, listProjects, loadProject } from '@/features/project/persistence'
+import type { ProjectSummary } from '@/features/project/persistence'
 import { getPromptTemplates } from '@/features/prompts/templates'
 import { renderPrompt } from '@/features/prompts/render'
+import { ScriptTaskClient } from '@/features/script-tasks/client'
+import type { ReviewRequest, ScriptTaskCreate, ScriptTaskResponse } from '@/features/script-tasks/types'
+import { StageReviewClient } from '@/features/stage-reviews/client'
+import type { StageReviewApi } from '@/features/stage-reviews/types'
 
-const sampleText = `第一章 关键文件
-某个项目中出现一份内容不完整的关键文件，主角开始核对记录并寻找缺失信息。
+const sampleText = `第一章 雨夜来电
+临江城暴雨封路。遗产调查员林夏收到一通没有来电号码的电话，对方只说了一句：不要让他们看到信托文件。
 
-第二章 新的线索
-主角在已有资料中发现几处不一致，并通过交叉核对逐步缩小调查范围。
+第二章 被抹去的名字
+林夏在旧档案中发现自己的出生记录与顾氏基金会有关，而记录的最后一页被人为撕走。
 
-第三章 阶段确认
-一名协作者提供补充材料，双方核实信息后整理出阶段性结论。`
+第三章 交换条件
+顾言带来一份副本，却要求林夏停止调查。就在两人争执时，基金会宣布将在二十四小时后销毁旧档案。`
 
 export const useWorkflowStore = defineStore('workflow', () => {
   const project = ref<Project>(createProject())
@@ -24,15 +29,25 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const notice = ref('')
   const savingPaused = ref(false)
   const currentTaskId = ref<string | null>(null)
+  const projectListVersion = ref(0)
   let adapter: AiAdapter = createAiAdapter()
+  let scriptTaskClient: ScriptTaskClient | null = import.meta.env.VITE_SCRIPT_WORKFLOW === 'backend'
+    ? new ScriptTaskClient(import.meta.env.VITE_BACKEND_API_URL ?? '')
+    : null
+  let stageReviewClient: StageReviewApi = new StageReviewClient(import.meta.env.VITE_BACKEND_API_URL ?? '')
   const saveLater = typeof localStorage === 'undefined' ? null : createDebouncedSaver(300)
 
-  watch(project, (value) => saveLater?.(value, (result) => { savingPaused.value = !result.ok }), { deep: true })
+  watch(project, (value) => saveLater?.(value, (result) => {
+    savingPaused.value = !result.ok
+    if (result.ok) projectListVersion.value += 1
+  }), { deep: true })
 
   const activeStage = computed(() => project.value.activeStage)
   const completedEpisodes = computed(() => project.value.scripts.filter((item) => item.status === 'confirmed' || item.status === 'ready').length)
 
   function setAdapter(next: AiAdapter) { adapter = next }
+  function setScriptTaskClient(next: ScriptTaskClient | null) { scriptTaskClient = next }
+  function setStageReviewClient(next: StageReviewApi) { stageReviewClient = next }
   function setStage(stage: StageId) { project.value.activeStage = stage }
   function renameProject(name: string) { project.value.name = name.trim() || '未命名漫剧项目' }
   function clearNotice() { notice.value = '' }
@@ -41,14 +56,119 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return `${template.systemPrompt}\n\n${renderPrompt(template.userTemplate, variables)}`
   }
 
+  function stageSnapshot(stage: ReviewableStageId): Record<string, unknown> {
+    if (stage === 'analysis') return { content: project.value.analysis.content }
+    if (stage === 'adaptation') {
+      const { status: _status, ...content } = project.value.adaptation
+      return content
+    }
+    if (stage === 'planning') {
+      const { status: _status, ...content } = project.value.planning
+      return content
+    }
+    return { outlines: project.value.outlines.map(({ episodeNumber, title, content }) => ({ episodeNumber, title, content })) }
+  }
+
+  function upstreamContext(stage: ReviewableStageId): Record<string, unknown> {
+    if (stage === 'analysis') return { source: project.value.source?.text ?? '' }
+    if (stage === 'adaptation') return { analysis: project.value.analysis.content }
+    if (stage === 'planning') return { adaptation: stageSnapshot('adaptation') }
+    return { planning: stageSnapshot('planning') }
+  }
+
+  function ensureStageVersion(stage: ReviewableStageId, source: 'model' | 'human' | 'restored' = 'human') {
+    const snapshot = stageSnapshot(stage)
+    const latest = project.value.stageReviews[stage].versions.at(-1)
+    if (!latest || JSON.stringify(latest.content) !== JSON.stringify(snapshot)) {
+      project.value = recordStageVersion(project.value, stage, snapshot, source)
+    }
+  }
+
+  function confirmStageVersion(stage: ReviewableStageId) {
+    const review = project.value.stageReviews[stage]
+    const current = review.versions.find((version) => version.version === review.currentVersion)
+    if (current) current.confirmed = true
+  }
+
+  function applyStageSnapshot(stage: ReviewableStageId, content: Record<string, unknown>) {
+    if (stage === 'analysis') {
+      project.value = markDirty(project.value, { type: 'analysis' })
+      project.value.analysis = { status: 'ready', content: String(content.content ?? '') }
+      return
+    }
+    if (stage === 'adaptation') {
+      project.value = markDirty(project.value, { type: 'adaptation' })
+      Object.assign(project.value.adaptation, content, { status: 'ready' })
+      return
+    }
+    if (stage === 'planning') {
+      project.value = markDirty(project.value, { type: 'planning' })
+      Object.assign(project.value.planning, content, { status: 'ready' })
+      return
+    }
+    const outlines = Array.isArray(content.outlines) ? content.outlines : []
+    project.value.outlines = outlines.map((item, index) => {
+      const value = item as { episodeNumber?: number; title?: string; content?: string }
+      return { episodeNumber: value.episodeNumber ?? index + 1, title: value.title ?? '', content: value.content ?? '', status: 'ready', locked: false }
+    })
+    project.value.scripts.forEach((script) => { if (script.status !== 'empty') script.status = 'dirty' })
+    Object.assign(project.value.stageReviews.outlines, { status: 'idle', checkedVersion: null, issues: [], revisionInstructions: [] })
+  }
+
+  async function checkStage(stage: ReviewableStageId) {
+    ensureStageVersion(stage)
+    project.value.stageReviews[stage].status = 'checking'
+    project.value.stageReviews[stage].error = undefined
+    busyAction.value = `check-${stage}`
+    try {
+      const result = await stageReviewClient.check({ stage, content: stageSnapshot(stage), upstream_context: upstreamContext(stage) })
+      project.value = markStageChecked(project.value, stage, result.passed, result.issues, result.revision_instructions)
+      notice.value = result.passed ? 'AI 自查通过，可以人工确认' : `AI 自查发现 ${result.issues.length} 个问题`
+    } catch (error) {
+      const review = project.value.stageReviews[stage]
+      review.status = 'error'
+      review.error = error instanceof Error ? error.message : 'AI 自查失败'
+      notice.value = review.error
+    } finally { busyAction.value = null }
+  }
+
+  async function reviseStage(stage: ReviewableStageId, userRequirements = '') {
+    ensureStageVersion(stage)
+    const review = project.value.stageReviews[stage]
+    busyAction.value = `revise-${stage}`
+    try {
+      const result = await stageReviewClient.revise({
+        stage, content: stageSnapshot(stage), upstream_context: upstreamContext(stage),
+        issues: review.issues, revision_instructions: review.revisionInstructions,
+        user_requirements: userRequirements
+      })
+      applyStageSnapshot(stage, result.content)
+      project.value = recordStageVersion(project.value, stage, stageSnapshot(stage), 'model')
+      notice.value = '已生成修订版本，请重新进行 AI 自查'
+    } catch (error) {
+      const current = project.value.stageReviews[stage]
+      current.status = 'error'
+      current.error = error instanceof Error ? error.message : '阶段修订失败'
+      notice.value = current.error
+    } finally { busyAction.value = null }
+  }
+
+  function restoreStageVersion(stage: ReviewableStageId, version: number) {
+    const item = project.value.stageReviews[stage].versions.find((entry) => entry.version === version)
+    if (!item || !item.content || typeof item.content !== 'object') return
+    applyStageSnapshot(stage, item.content as Record<string, unknown>)
+    project.value = recordStageVersion(project.value, stage, stageSnapshot(stage), 'restored')
+    notice.value = `已恢复 V${version}，请重新进行 AI 自查`
+  }
+
   function loadSample() {
     const analysisText = sourceTextForAnalysis(sampleText)
     project.value.source = {
-      name: '示例原稿《关键文件》.txt', type: 'sample', text: sampleText,
+      name: '示例原稿《雨夜来电》.txt', type: 'sample', text: sampleText,
       chapters: [
-        { title: '第一章 关键文件', content: '发现一份内容不完整的关键文件，开始核对记录。' },
-        { title: '第二章 新的线索', content: '发现资料之间存在不一致，并逐步缩小核查范围。' },
-        { title: '第三章 阶段确认', content: '补充材料经过核实，形成阶段性结论。' }
+        { title: '第一章 雨夜来电', content: '临江城暴雨封路。遗产调查员林夏收到神秘电话。' },
+        { title: '第二章 被抹去的名字', content: '林夏发现出生记录与顾氏基金会有关。' },
+        { title: '第三章 交换条件', content: '顾言带来副本，但基金会即将销毁旧档案。' }
       ],
       characterCount: sampleText.length,
       truncated: analysisText.truncated
@@ -79,6 +199,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         { onChunk: (chunk) => { project.value.analysis.content += chunk } }
       )
       project.value.analysis = { status: 'ready', content: result.content }
+      project.value = recordStageVersion(project.value, 'analysis', stageSnapshot('analysis'), 'model')
       notice.value = '原稿分析已生成'
     } catch (error) {
       project.value.analysis.status = 'error'
@@ -87,13 +208,22 @@ export const useWorkflowStore = defineStore('workflow', () => {
     } finally { busyAction.value = null }
   }
 
+  function updateAnalysis(content: string) {
+    const next = markDirty(project.value, { type: 'analysis' })
+    next.analysis = { status: 'ready', content }
+    project.value = next
+  }
+
   function confirmAnalysis() {
-    if (!project.value.analysis.content || project.value.analysis.status === 'generating') return
+    if (!project.value.analysis.content || project.value.analysis.status === 'generating' || !canConfirmStage(project.value, 'analysis').allowed) return
+    confirmStageVersion('analysis')
     project.value.analysis.status = 'confirmed'
     project.value.activeStage = 'adaptation'
   }
 
   async function generateAdaptation() {
+    const gate = canGenerate(project.value, 'adaptation')
+    if (!gate.allowed) { notice.value = gate.reason ?? '请先完成上游阶段'; return }
     busyAction.value = 'adaptation'
     project.value.adaptation.status = 'generating'
     Object.assign(project.value.adaptation, { direction: '', identity: '', world: '', characters: '' })
@@ -104,6 +234,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         (partial) => Object.assign(project.value.adaptation, partial)
       )
       Object.assign(project.value.adaptation, result, { status: 'ready' })
+      project.value = recordStageVersion(project.value, 'adaptation', stageSnapshot('adaptation'), 'model')
       notice.value = '漫剧设定已生成'
     } catch (error) {
       project.value.adaptation.status = 'error'
@@ -119,12 +250,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function confirmAdaptation() {
-    if (!project.value.adaptation.direction || project.value.adaptation.status === 'generating') return
+    if (!project.value.adaptation.direction || project.value.adaptation.status === 'generating' || !canConfirmStage(project.value, 'adaptation').allowed) return
+    confirmStageVersion('adaptation')
     project.value.adaptation.status = 'confirmed'
     project.value.activeStage = 'planning'
   }
 
   async function generatePlan() {
+    const gate = canGenerate(project.value, 'planning')
+    if (!gate.allowed) { notice.value = gate.reason ?? '请先完成上游阶段'; return }
     busyAction.value = 'planning'
     project.value.planning.status = 'generating'
     Object.assign(project.value.planning, { titleCandidates: [], genre: '', seriesOutline: '', phasePlan: '' })
@@ -142,6 +276,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         }
       )
       Object.assign(project.value.planning, result, { title: result.titleCandidates[0] ?? '', status: 'ready' })
+      project.value = recordStageVersion(project.value, 'planning', stageSnapshot('planning'), 'model')
       notice.value = '全剧规划已生成'
     } catch (error) {
       project.value.planning.status = 'error'
@@ -166,12 +301,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function confirmPlan() {
-    if (!project.value.planning.seriesOutline || project.value.planning.status === 'generating') return
+    if (!project.value.planning.seriesOutline || project.value.planning.status === 'generating' || !canConfirmStage(project.value, 'planning').allowed) return
+    confirmStageVersion('planning')
     project.value.planning.status = 'confirmed'
     project.value.activeStage = 'outlines'
   }
 
   async function generateOutlines() {
+    const gate = canGenerate(project.value, 'outlines')
+    if (!gate.allowed) { notice.value = gate.reason ?? '请先完成上游阶段'; return }
     busyAction.value = 'outlines'
     progress.value = 0
     try {
@@ -195,6 +333,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         }
       }
       notice.value = '分集大纲已生成'
+      project.value = recordStageVersion(project.value, 'outlines', stageSnapshot('outlines'), 'model')
     } catch (error) {
       notice.value = `分集大纲生成失败：${error instanceof Error ? error.message : '未知错误'}`
     } finally { busyAction.value = null }
@@ -217,9 +356,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   function confirmOutline(episodeNumber: number): number {
     const outline = project.value.outlines[episodeNumber - 1]
-    if (!outline?.content || busyAction.value === 'outlines' || project.value.outlines.some((item) => item.status === 'generating')) return episodeNumber
+    if (!outline?.content || busyAction.value === 'outlines' || project.value.outlines.some((item) => item.status === 'generating') || !canConfirmStage(project.value, 'outlines').allowed) return episodeNumber
     outline.status = 'confirmed'
     if (episodeNumber >= project.value.outlines.length) {
+      confirmStageVersion('outlines')
       project.value.activeStage = 'scripts'
       return episodeNumber
     }
@@ -227,10 +367,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function confirmAllOutlines(): boolean {
-    if (busyAction.value === 'outlines' || project.value.outlines.some((item) => item.status === 'generating')) return false
+    if (busyAction.value === 'outlines' || project.value.outlines.some((item) => item.status === 'generating') || !canConfirmStage(project.value, 'outlines').allowed) return false
     const generated = project.value.outlines.filter((item) => item.content)
     if (!generated.length) return false
     generated.forEach((outline) => { outline.status = 'confirmed' })
+    confirmStageVersion('outlines')
     project.value.activeStage = 'scripts'
     return true
   }
@@ -244,6 +385,13 @@ export const useWorkflowStore = defineStore('workflow', () => {
     script.content = ''
     script.partial = false
     try {
+      if (scriptTaskClient) {
+        const result = await runBackendEpisode(episodeNumber)
+        notice.value = result.status === 'awaiting_human_review'
+          ? `第 ${episodeNumber} 集等待人工确认`
+          : `第 ${episodeNumber} 集生成完成`
+        return
+      }
       const context = `${project.value.adaptation.characters}\n${project.value.adaptation.world}`
       const previousSummary = episodeNumber > 1 ? project.value.scripts[episodeNumber - 2].content.slice(-400) : ''
       const variables = { episodeNumber, targetWords: project.value.planning.targetWords, context, previousSummary, outline: outline.content }
@@ -293,6 +441,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
     script.status = 'generating'
     busyAction.value = `rewrite-${episodeNumber}`
     try {
+      if (scriptTaskClient) {
+        await runBackendEpisode(episodeNumber, instruction, previous)
+        return
+      }
       await adapter.rewriteEpisode({
         episodeNumber, outline: outline.content, targetWords: project.value.planning.targetWords,
         script: previous, instruction,
@@ -311,7 +463,110 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   async function stopCurrentGeneration() {
-    if (currentTaskId.value) await adapter.stopGeneration(currentTaskId.value)
+    if (!currentTaskId.value) return
+    if (scriptTaskClient) {
+      const script = project.value.scripts.find((item) => item.taskId === currentTaskId.value)
+      if (script) await cancelScriptTask(script.episodeNumber)
+      return
+    }
+    await adapter.stopGeneration(currentTaskId.value)
+  }
+
+  async function reviewScriptTask(episodeNumber: number, review: ReviewRequest) {
+    const script = project.value.scripts[episodeNumber - 1]
+    if (!scriptTaskClient || !script?.taskId) throw new Error('当前剧本没有可审核的后端任务')
+    busyAction.value = `review-${episodeNumber}`
+    script.status = 'generating'
+    try {
+      applyBackendTask(script, await scriptTaskClient.review(script.taskId, review))
+      const result = await scriptTaskClient.waitForReview(script.taskId, {
+        onUpdate: (task) => applyBackendTask(script, task)
+      })
+      applyBackendTask(script, result)
+      if (result.status === 'model_failed' || result.status === 'validation_failed') {
+        notice.value = result.error_message ?? '后端剧本修订失败'
+        return
+      }
+      if (result.status === 'cancelled') {
+        notice.value = `第 ${episodeNumber} 集任务已取消`
+        return
+      }
+      await loadScriptVersions(episodeNumber)
+      notice.value = result.status === 'completed' ? `第 ${episodeNumber} 集已确认` : `第 ${episodeNumber} 集修订完成，等待确认`
+    } catch (error) {
+      script.status = script.content ? 'ready' : 'error'
+      notice.value = error instanceof Error ? error.message : '剧本审核操作失败'
+      throw error
+    } finally {
+      busyAction.value = null
+    }
+  }
+
+  async function loadScriptVersions(episodeNumber: number) {
+    const script = project.value.scripts[episodeNumber - 1]
+    if (!scriptTaskClient || !script?.taskId) return []
+    const versions = await scriptTaskClient.versions(script.taskId)
+    script.versions = versions
+    return versions
+  }
+
+  async function cancelScriptTask(episodeNumber: number) {
+    const script = project.value.scripts[episodeNumber - 1]
+    if (!scriptTaskClient || !script?.taskId) return
+    const result = await scriptTaskClient.cancel(script.taskId)
+    applyBackendTask(script, result)
+    script.status = script.content ? 'ready' : 'empty'
+    if (currentTaskId.value === script.taskId) currentTaskId.value = null
+  }
+
+  async function runBackendEpisode(episodeNumber: number, instruction = '', currentScript = '') {
+    const outline = project.value.outlines[episodeNumber - 1]
+    const script = project.value.scripts[episodeNumber - 1]
+    if (!scriptTaskClient || !outline || !script) throw new Error('后端剧本任务不可用')
+    const previousSummary = episodeNumber > 1 ? project.value.scripts[episodeNumber - 2].content.slice(-400) : ''
+    const userRequirements = [instruction, currentScript ? `当前剧本：\n${currentScript}` : ''].filter(Boolean).join('\n\n')
+    const payload: ScriptTaskCreate = {
+      project_id: project.value.id,
+      episode_id: `${project.value.id}-episode-${episodeNumber}`,
+      episode_number: episodeNumber,
+      episode_outline: outline.content,
+      character_context: project.value.adaptation.characters,
+      world_context: project.value.adaptation.world,
+      previous_episode_summary: previousSummary,
+      user_requirements: userRequirements,
+      target_words: project.value.planning.targetWords,
+      max_retries: 2
+    }
+    const created = await scriptTaskClient.create(payload)
+    applyBackendTask(script, created)
+    currentTaskId.value = created.task_id
+    const result = await scriptTaskClient.waitForReview(created.task_id, {
+      onUpdate: (task) => applyBackendTask(script, task)
+    })
+    applyBackendTask(script, result)
+    if (['model_failed', 'validation_failed'].includes(result.status)) {
+      throw new Error(result.error_message ?? '后端剧本生成失败')
+    }
+    if (result.status === 'awaiting_human_review' || result.status === 'completed') await loadScriptVersions(episodeNumber)
+    return result
+  }
+
+  function applyBackendTask(script: EpisodeScript, task: ScriptTaskResponse) {
+    script.taskId = task.task_id
+    script.taskStatus = task.status
+    script.taskStage = task.current_stage
+    script.taskProgress = task.progress
+    script.retryCount = task.retry_count
+    script.maxRetries = task.max_retries
+    script.qualityCheck = task.quality_check_result
+    script.taskErrorCode = task.error_code
+    script.taskErrorMessage = task.error_message
+    if (task.script_content) script.content = task.script_content
+    if (task.status === 'completed' && task.final_approved) script.status = 'confirmed'
+    else if (task.status === 'awaiting_human_review') script.status = 'ready'
+    else if (task.status === 'cancelled') script.status = script.content ? 'ready' : 'empty'
+    else if (task.status === 'model_failed' || task.status === 'validation_failed') script.status = script.content ? 'ready' : 'error'
+    else script.status = 'generating'
   }
 
   function updateScript(episodeNumber: number, content: string) {
@@ -324,12 +579,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
   function confirmScript(episodeNumber: number): number {
     const script = project.value.scripts[episodeNumber - 1]
     if (!script?.content || busyAction.value || project.value.scripts.some((item) => item.status === 'generating')) return episodeNumber
+    if (script.taskId && script.taskStatus !== 'completed') return episodeNumber
     script.status = 'confirmed'
     return Math.min(episodeNumber + 1, project.value.scripts.length)
   }
 
   function confirmAllScripts(): boolean {
     if (busyAction.value || project.value.scripts.some((item) => item.status === 'generating')) return false
+    if (project.value.scripts.some((item) => item.taskId && item.taskStatus !== 'completed')) return false
     const generated = project.value.scripts.filter((item) => item.content)
     if (!generated.length) return false
     generated.forEach((script) => { script.status = 'confirmed' })
@@ -340,6 +597,22 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const restored = loadProject(projectId)
     if (!restored) return false
     project.value = restored
+    projectListVersion.value += 1
+    notice.value = `已打开项目：${restored.name}`
+    return true
+  }
+
+  function getProjectRecords(): ProjectSummary[] {
+    void projectListVersion.value
+    return listProjects()
+  }
+
+  function removeProject(projectId: string): boolean {
+    const result = deleteStoredProject(projectId)
+    if (!result.ok) { notice.value = result.error ?? '项目删除失败'; return false }
+    if (projectId === project.value.id) project.value = createProject()
+    projectListVersion.value += 1
+    notice.value = '项目记录已删除'
     return true
   }
 
@@ -354,12 +627,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
   function resetProject() { project.value = createProject(); notice.value = '已创建新项目' }
 
   return {
-    project, activeStage, busyAction, progress, notice, savingPaused, completedEpisodes, currentTaskId,
-    setAdapter, setStage, renameProject, clearNotice, loadSample, importSourceFile,
-    analyzeSource, confirmAnalysis, generateAdaptation, updateAdaptation, confirmAdaptation,
+    project, activeStage, busyAction, progress, notice, savingPaused, completedEpisodes, currentTaskId, projectListVersion,
+    setAdapter, setScriptTaskClient, setStageReviewClient, setStage, renameProject, clearNotice, loadSample, importSourceFile,
+    checkStage, reviseStage, restoreStageVersion,
+    analyzeSource, updateAnalysis, confirmAnalysis, generateAdaptation, updateAdaptation, confirmAdaptation,
     generatePlan, updatePlanning, updateEpisodeCount, updateTargetWords, confirmPlan,
     generateOutlines, updateOutline, toggleOutlineLock, confirmOutline, confirmAllOutlines,
-    generateEpisode, generateBatch, rewriteEpisode, stopCurrentGeneration, updateScript, confirmScript, confirmAllScripts,
-    restore, importProjectJson, resetProject
+    generateEpisode, generateBatch, rewriteEpisode, stopCurrentGeneration, reviewScriptTask, loadScriptVersions, cancelScriptTask,
+    updateScript, confirmScript, confirmAllScripts,
+    restore, getProjectRecords, removeProject, importProjectJson, resetProject
   }
 })

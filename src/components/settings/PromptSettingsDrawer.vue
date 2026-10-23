@@ -16,6 +16,7 @@ function save() { localStorage.setItem(storageKey, JSON.stringify(templates)); s
 function restore() {
   Object.assign(templates, cloneDefaults())
   localStorage.removeItem(storageKey)
+  localStorage.removeItem('adaptation-workbench.prompts.v1')
   savedNotice.value = false
 }
 </script>

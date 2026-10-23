@@ -18,9 +18,9 @@ export class MockAiAdapter implements AiAdapter {
     callbacks?: StreamCallbacks
   ): Promise<{ content: string }> {
     const chunks = [
-      '【题材】悬疑与调查\n【核心卖点】主角通过核对线索逐步发现关键信息。\n',
-      '【主角线】从发现问题到核实信息并解决问题。\n【视觉看点】资料对照、线索整理、关键发现。\n',
-      '【漫剧建议】明确每一阶段的目标、线索和结果，减少重复信息。'
+      '【题材】都市悬疑与身份逆袭\n【核心卖点】被低估的继承人夺回人生主动权。\n',
+      '【主角线】从隐忍求生到公开反击。\n【视觉看点】雨夜来电、撕毁档案、信托文件对峙。\n',
+      '【漫剧建议】强化前三集画面钩子，压缩重复误会。'
     ]
     for (const chunk of chunks) {
       await wait(this.latencyMs)
@@ -31,10 +31,10 @@ export class MockAiAdapter implements AiAdapter {
 
   async generateAdaptation(_input: Parameters<AiAdapter['generateAdaptation']>[0], onPartial?: PartialResultCallback<AdaptationResult>): Promise<AdaptationResult> {
     const result: AdaptationResult = {
-      direction: '面向竖屏内容观众，以逐步发现线索、核实信息和解决问题为主线，画面表达清晰、节奏紧凑。',
-      identity: '主角A负责核对关键资料，逐步发现文件之间存在不一致。',
-      world: '虚构城市A。工作团队、资料管理部门和协作人员构成主要关系网络。',
-      characters: '主角A：负责核查信息；角色B：提供补充材料；角色C：负责复核阶段结论。'
+      direction: '面向竖屏漫剧观众，以家族权力斗争、身份谜团和情感背叛为主线，画面钩子明确、节奏直接。',
+      identity: '女主林夏是被收养家庭压制的遗产调查员，真实身份与一份失踪信托有关。',
+      world: '当代临江城。家族基金会、私人调查机构和地方媒体构成主要权力网络。',
+      characters: '林夏：冷静克制的调查员；顾言：利益与感情冲突的继承人；顾曼：掌控家族资源的对手。'
     }
     for (const field of ['direction', 'identity', 'world', 'characters'] as const) {
       await wait(this.latencyMs)
@@ -45,10 +45,10 @@ export class MockAiAdapter implements AiAdapter {
 
   async generateSeriesPlan(input: { episodeCount: number }, onPartial?: PartialResultCallback<SeriesPlanResult>): Promise<SeriesPlanResult> {
     const result: SeriesPlanResult = {
-      titleCandidates: ['《关键线索》', '《资料之外》', '《阶段结论》'],
-      genre: '悬疑调查',
-      seriesOutline: `全剧共 ${input.episodeCount} 集。主角A从一份异常资料入手，逐步核实相关记录，在协作与分歧中补全信息并形成结论。`,
-      phasePlan: '起始：发现资料异常；推进：收集补充线索；核查：交叉验证记录；解决：补全关键信息；收束：整理并确认结论。'
+      titleCandidates: ['《逆光继承人》', '《她的第二身份》', '《失落信托》'],
+      genre: '都市情感 / 身份逆袭',
+      seriesOutline: `全剧共 ${input.episodeCount} 集。林夏从一宗异常遗产案入手，发现自己的身世被人为抹除，在盟友与对手不断易位的过程中夺回证据与选择权。`,
+      phasePlan: '起势：遗嘱异常；升级：身份线索出现；失控：证据被夺；反击：公开交易记录；收束：真相与关系完成回报。'
     }
     for (const field of ['titleCandidates', 'genre', 'seriesOutline', 'phasePlan'] as const) {
       await wait(this.latencyMs)
@@ -65,8 +65,8 @@ export class MockAiAdapter implements AiAdapter {
       await wait(Math.min(this.latencyMs, 10))
       onOutline?.({
         ...current,
-        title: `第 ${current.episodeNumber} 集 · ${current.episodeNumber === 1 ? '发现关键差异' : '线索继续收紧'}`,
-        content: `第 ${current.episodeNumber} 集：开场以新的证据或威胁形成画面钩子，主角A推进核查并发现新的信息差异；结尾以待验证的问题形成悬念。`,
+        title: `第 ${current.episodeNumber} 集 · ${current.episodeNumber === 1 ? '被改写的遗嘱' : '线索继续收紧'}`,
+        content: `第 ${current.episodeNumber} 集：开场以新的证据或威胁形成画面钩子，林夏推进调查并迫使对手暴露一层目的；结尾以关系反转或证据失控形成悬念。`,
         status: 'ready'
       }, Math.min(99, Math.round(current.episodeNumber / input.project.outlines.length * 100)))
     }
@@ -81,8 +81,8 @@ export class MockAiAdapter implements AiAdapter {
     if (job.progress < 100) return { jobId, status: 'running', progress: job.progress }
     const outlines: EpisodeOutline[] = job.input.project.outlines.map((current) => current.locked ? current : {
       ...current,
-      title: `第 ${current.episodeNumber} 集 · ${current.episodeNumber === 1 ? '发现关键差异' : '线索继续收紧'}`,
-      content: `第 ${current.episodeNumber} 集：开场以新的证据或威胁形成画面钩子，主角A推进核查并发现新的信息差异；结尾以待验证的问题形成悬念。`,
+      title: `第 ${current.episodeNumber} 集 · ${current.episodeNumber === 1 ? '被改写的遗嘱' : '线索继续收紧'}`,
+      content: `第 ${current.episodeNumber} 集：开场以新的证据或威胁形成画面钩子，林夏推进调查并迫使对手暴露一层目的；结尾以关系反转或证据失控形成悬念。`,
       status: 'ready'
     })
     return { jobId, status: 'completed', progress: 100, outlines }
@@ -103,9 +103,9 @@ export class MockAiAdapter implements AiAdapter {
     callbacks.onStart?.(taskId)
     const chunks = [
       `第 ${input.episodeNumber} 集\n\n1. 内景 · 调查事务所 · 日\n`,
-      '主角A将两份资料放在桌面。\n主角A：这两处记录不一致，需要进一步核实。\n',
-      '协作者B带着补充材料走进来。\n协作者B：我找到了可以交叉核对的记录。\n',
-      `主角A抬起头，继续整理资料。\n主角A：我们先核实记录，再确认结论。\n\n【本集悬念】${input.outline}`
+      '林夏将一份泛黄的信托文件压在桌面。\n林夏：签名是真的，但日期被人动过。\n',
+      '门外传来急促脚步，顾言推门而入。\n顾言：他们已经知道你拿到了副本。\n',
+      `林夏抬眼，没有收起文件。\n林夏：那就让他们来。\n\n【本集悬念】${input.outline}`
     ]
     for (const chunk of chunks) {
       if (this.stopped.has(taskId)) {

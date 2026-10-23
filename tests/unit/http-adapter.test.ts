@@ -4,6 +4,16 @@ import { HttpAiAdapter } from '@/features/ai/http-adapter'
 afterEach(() => vi.unstubAllGlobals())
 
 describe('HttpAiAdapter OpenAI-compatible transport', () => {
+  it('surfaces sanitized FastAPI error details', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: '模型服务尚未完整配置' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' }
+    })))
+    const adapter = new HttpAiAdapter('/api')
+
+    await expect(adapter.analyzeSource({ sourceText: '原稿' }, { onChunk: () => undefined })).rejects.toThrow('模型服务尚未完整配置')
+  })
+
   it('streams analysis text through the local proxy and returns the complete result', async () => {
     const sse = 'data: {"choices":[{"delta":{"content":"分析"}}]}\n\ndata: {"choices":[{"delta":{"content":"结果"}}]}\n\ndata: [DONE]\n\n'
     const fetchMock = vi.fn().mockResolvedValue(new Response(sse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }))

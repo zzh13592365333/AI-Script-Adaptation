@@ -26,12 +26,13 @@ describe('workbench stages one to three', () => {
     const wrapper = mount(SourceAnalysisView, { global: { plugins: [pinia] } })
     await wrapper.get('[data-test="load-sample"]').trigger('click')
     expect(useWorkflowStore().project.source?.name).toContain('示例')
-    expect(wrapper.text()).toContain('关键文件')
+    expect(wrapper.text()).toContain('雨夜来电')
   })
 
   it('uses neutral workbench branding', () => {
     const wrapper = mount(AppToolbar, { global: { plugins: [createPinia()] } })
     expect(wrapper.text()).toContain('自动AI漫剧流程')
+    expect(wrapper.text()).not.toMatch(/海外短剧/i)
   })
 
   it('shows confirmed for a stage when all generated items are confirmed', async () => {

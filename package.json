@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:frontend": "vite",
+    "dev:backend": "python -m uvicorn backend.app.main:app --reload --port 8000",
+    "dev:all": "concurrently -k -n frontend,backend \"npm:dev:frontend\" \"npm:dev:backend\"",
     "build": "vue-tsc -b && vite build",
     "typecheck": "vue-tsc -b --pretty false",
     "test": "vitest run",
@@ -22,12 +25,13 @@
   "devDependencies": {
     "@playwright/test": "^1.49.1",
     "@types/node": "^22.10.2",
-    "@vitejs/plugin-vue": "^5.2.1",
+    "@vitejs/plugin-vue": "^6.0.10",
     "@vue/test-utils": "^2.4.6",
+    "concurrently": "^9.2.5",
     "jsdom": "^25.0.1",
     "typescript": "~5.7.2",
-    "vite": "^5.4.21",
-    "vitest": "^2.1.8",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5",
     "vue-tsc": "^2.2.0"
   }
 }

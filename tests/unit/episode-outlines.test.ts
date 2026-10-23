@@ -46,6 +46,7 @@ describe('episode outline workflow', () => {
     const store = useWorkflowStore()
     store.setAdapter(new StreamingOutlinesAdapter({ latencyMs: 1 }))
     store.project.planning.seriesOutline = '总纲'
+    store.project.planning.status = 'confirmed'
     const generation = store.generateOutlines()
     await Promise.resolve()
     expect(store.project.outlines[0].title).toBe('实时第一集')
@@ -58,6 +59,7 @@ describe('episode outline workflow', () => {
     const store = useWorkflowStore()
     store.project.activeStage = 'outlines'
     store.project.outlines.forEach((outline) => { outline.content = `第 ${outline.episodeNumber} 集`; outline.status = 'ready' })
+    Object.assign(store.project.stageReviews.outlines, { status: 'passed', currentVersion: 1, checkedVersion: 1 })
     expect(store.confirmOutline(1)).toBe(2)
     expect(store.project.activeStage).toBe('outlines')
     expect(store.confirmOutline(store.project.outlines.length)).toBe(store.project.outlines.length)
@@ -67,6 +69,7 @@ describe('episode outline workflow', () => {
   it('confirms all outlines at once but refuses while generation is active', () => {
     const store = useWorkflowStore()
     store.project.outlines.forEach((outline) => { outline.content = `第 ${outline.episodeNumber} 集`; outline.status = 'ready' })
+    Object.assign(store.project.stageReviews.outlines, { status: 'passed', currentVersion: 1, checkedVersion: 1 })
     store.busyAction = 'outlines'
     expect(store.confirmAllOutlines()).toBe(false)
     expect(store.project.outlines[0].status).toBe('ready')

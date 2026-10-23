@@ -1,4 +1,4 @@
-import { createOutline, createScript, type NodeStatus, type Project, type StageId } from './project'
+import { createOutline, createScript, type NodeStatus, type Project, type ReviewableStageId, type StageId, type StageVersion } from './project'
 
 export type DirtySource =
   | { type: 'source' | 'analysis' | 'adaptation' | 'planning' }
@@ -24,30 +24,87 @@ function cloneProject(project: Project): Project {
   return JSON.parse(JSON.stringify(project)) as Project
 }
 
+function invalidateReview(project: Project, stages: ReviewableStageId[]) {
+  stages.forEach((stage) => {
+    const review = project.stageReviews[stage]
+    review.status = 'idle'
+    review.checkedVersion = null
+    review.issues = []
+    review.revisionInstructions = []
+    review.error = undefined
+  })
+}
+
 export function markDirty(project: Project, source: DirtySource): Project {
   const next = cloneProject(project)
   next.updatedAt = new Date().toISOString()
 
   if (source.type === 'source' || source.type === 'analysis') {
+    invalidateReview(next, ['analysis', 'adaptation', 'planning', 'outlines'])
     next.analysis.status = dirty(next.analysis.status)
     next.adaptation.status = dirty(next.adaptation.status)
     next.planning.status = dirty(next.planning.status)
     next.outlines.forEach((item) => { item.status = dirty(item.status) })
     next.scripts.forEach((item) => { item.status = dirty(item.status) })
   } else if (source.type === 'adaptation') {
+    invalidateReview(next, ['adaptation', 'planning', 'outlines'])
     next.planning.status = dirty(next.planning.status)
     next.outlines.forEach((item) => { item.status = dirty(item.status) })
     next.scripts.forEach((item) => { item.status = dirty(item.status) })
   } else if (source.type === 'planning') {
+    invalidateReview(next, ['planning', 'outlines'])
     next.outlines.forEach((item) => { item.status = dirty(item.status) })
     next.scripts.forEach((item) => { item.status = dirty(item.status) })
   } else if (source.type === 'outline') {
+    invalidateReview(next, ['outlines'])
     next.scripts.slice(source.episodeNumber - 1).forEach((item) => { item.status = dirty(item.status) })
   } else if (source.type === 'script') {
     const following = next.scripts[source.episodeNumber]
     if (following) following.summaryStale = true
   }
   return next
+}
+
+export function recordStageVersion(
+  project: Project,
+  stage: ReviewableStageId,
+  content: unknown,
+  source: StageVersion['source']
+): Project {
+  const next = cloneProject(project)
+  const review = next.stageReviews[stage]
+  const version = review.currentVersion + 1
+  review.currentVersion = version
+  review.status = 'idle'
+  review.checkedVersion = null
+  review.issues = []
+  review.revisionInstructions = []
+  review.error = undefined
+  review.versions.push({ version, content, source, confirmed: false, createdAt: new Date().toISOString() })
+  return next
+}
+
+export function markStageChecked(
+  project: Project,
+  stage: ReviewableStageId,
+  passed: boolean,
+  issues: string[],
+  revisionInstructions: string[]
+): Project {
+  const next = cloneProject(project)
+  const review = next.stageReviews[stage]
+  review.status = passed ? 'passed' : 'issues_found'
+  review.checkedVersion = review.currentVersion
+  review.issues = [...issues]
+  review.revisionInstructions = [...revisionInstructions]
+  review.error = undefined
+  return next
+}
+
+export function canConfirmStage(project: Project, stage: ReviewableStageId): GateResult {
+  const review = project.stageReviews[stage]
+  if (!review.currentVersion) return { allowed: false, reason: '请先生成当前阶段内容' }
+  return { allowed: true }
 }
 
 export function canGenerate(project: Project, stage: Exclude<StageId, 'source'>): GateResult {

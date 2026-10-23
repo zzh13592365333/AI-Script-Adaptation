@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createProject } from '@/domain/project'
-import { aggregateNodeStatuses, canGenerate, markDirty, resizeEpisodes } from '@/domain/workflow'
+import { aggregateNodeStatuses, canConfirmStage, canGenerate, markDirty, markStageChecked, recordStageVersion, resizeEpisodes } from '@/domain/workflow'
 
 describe('workflow domain', () => {
   it('creates the exact project defaults', () => {
@@ -11,6 +11,31 @@ describe('workflow domain', () => {
     expect(project.analysis.status).toBe('empty')
     expect(project.outlines).toHaveLength(24)
     expect(project.scripts).toHaveLength(24)
+    expect(project.stageReviews.analysis.status).toBe('idle')
+  })
+
+  it('allows confirmation without requiring an AI check', () => {
+    let project = recordStageVersion(createProject(), 'analysis', { content: '第一版分析' }, 'model')
+    expect(canConfirmStage(project, 'analysis').allowed).toBe(true)
+
+    project = markStageChecked(project, 'analysis', true, [], [])
+    expect(canConfirmStage(project, 'analysis').allowed).toBe(true)
+
+    project = recordStageVersion(project, 'analysis', { content: '第二版分析' }, 'human')
+    expect(project.stageReviews.analysis.versions).toHaveLength(2)
+    expect(canConfirmStage(project, 'analysis').allowed).toBe(true)
+  })
+
+  it('invalidates downstream review gates without deleting their versions', () => {
+    let project = recordStageVersion(createProject(), 'planning', { seriesOutline: '旧规划' }, 'model')
+    project = markStageChecked(project, 'planning', true, [], [])
+    project.planning.status = 'confirmed'
+
+    const next = markDirty(project, { type: 'adaptation' })
+
+    expect(next.stageReviews.planning.status).toBe('idle')
+    expect(next.stageReviews.planning.versions).toHaveLength(1)
+    expect(next.planning.status).toBe('dirty')
   })
 
   it('marks all populated downstream nodes dirty after a source change', () => {

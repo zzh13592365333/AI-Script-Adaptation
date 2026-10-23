@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { Check, Sparkles } from 'lucide-vue-next'
+import { computed } from 'vue'
+import { Sparkles } from 'lucide-vue-next'
 import { useWorkflowStore } from '@/stores/workflow'
+import { canConfirmStage } from '@/domain/workflow'
 import ActionButton from '@/components/common/ActionButton.vue'
 import FieldEditor from '@/components/common/FieldEditor.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+import StageReviewPanel from '@/components/review/StageReviewPanel.vue'
 const store = useWorkflowStore()
+const canConfirm = computed(() => canConfirmStage(store.project, 'adaptation').allowed)
 </script>
 <template>
   <div class="stage-view">
@@ -16,6 +20,6 @@ const store = useWorkflowStore()
       <section class="editor-panel"><FieldEditor label="世界观" hint="时代、地点、规则、组织和资源约束" :model-value="store.project.adaptation.world" @update:model-value="store.updateAdaptation('world', $event)" /></section>
       <section class="editor-panel"><FieldEditor label="主要人物" hint="人物动机、秘密、关系和原稿映射" :rows="7" :model-value="store.project.adaptation.characters" @update:model-value="store.updateAdaptation('characters', $event)" /></section>
     </div>
-    <footer v-if="store.project.analysis.content" class="sticky-actions"><span>确认后，该版本将作为全剧规划的输入。</span><ActionButton label="确认漫剧设定" variant="primary" :disabled="!store.project.adaptation.direction || store.project.adaptation.status === 'generating'" @click="store.confirmAdaptation"><Check :size="17" /></ActionButton></footer>
+    <StageReviewPanel v-if="store.project.adaptation.direction" :state="store.project.stageReviews.adaptation" confirm-label="确认设定并进入全剧规划" :can-confirm="canConfirm" :busy="Boolean(store.busyAction)" @check="store.checkStage('adaptation')" @revise="store.reviseStage('adaptation', $event)" @restore="store.restoreStageVersion('adaptation', $event)" @confirm="store.confirmAdaptation" />
   </div>
 </template>

@@ -36,8 +36,8 @@ export class HttpAiAdapter implements AiAdapter {
       signal
     })
     if (!response.ok) {
-      const detail = await response.json().catch(() => null) as { error?: string } | null
-      throw new Error(detail?.error ?? `请求失败：${response.status}`)
+      const detail = await response.json().catch(() => null) as { detail?: string; error?: string } | null
+      throw new Error(detail?.error ?? detail?.detail ?? `请求失败：${response.status}`)
     }
     return response
   }

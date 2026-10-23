@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createProject } from '@/domain/project'
-import { importProject, loadProject, saveProject } from '@/features/project/persistence'
+import { deleteProject, importProject, listProjects, loadProject, saveProject } from '@/features/project/persistence'
 
 describe('project persistence', () => {
   it('round-trips a valid project', () => {
@@ -25,6 +25,16 @@ describe('project persistence', () => {
     expect(result).toEqual({ ok: false, savingPaused: true, error: '本地存储空间不足' })
   })
 
+  it('reads legacy project storage while writing the neutral key', () => {
+    const project = createProject()
+    const storage = new Map<string, string>()
+    storage.set(`adaptation-workbench.project.v1.${project.id}`, JSON.stringify(project))
+    const api = { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => { storage.set(key, value) } }
+    expect(loadProject(project.id, api)?.id).toBe(project.id)
+    saveProject(project, api)
+    expect(storage.has(`ai-comic-workflow.project.v1.${project.id}`)).toBe(true)
+  })
+
   it('normalizes structured planning fields from saved projects', () => {
     const project = createProject()
     ;(project.planning as unknown as { phasePlan: unknown }).phasePlan = [{ phase: '起势', content: '遗嘱出现' }]
@@ -33,5 +43,41 @@ describe('project persistence', () => {
     const loaded = loadProject(project.id, api)
     expect(loaded?.planning.phasePlan).toContain('遗嘱出现')
     expect(loaded?.planning.phasePlan).not.toContain('[object Object]')
+  })
+
+  it('migrates projects that predate stage review metadata', () => {
+    const project = createProject()
+    const legacy = JSON.parse(JSON.stringify(project)) as Record<string, unknown>
+    delete legacy.stageReviews
+    const storage = new Map<string, string>([[`ai-comic-workflow.project.v1.${project.id}`, JSON.stringify(legacy)]])
+    const api = { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => { storage.set(key, value) } }
+
+    const loaded = loadProject(project.id, api)
+
+    expect(loaded?.stageReviews.analysis.status).toBe('idle')
+    expect(loaded?.stageReviews.outlines.versions).toEqual([])
+  })
+
+  it('lists saved projects with newest updates first and deletes one project', () => {
+    const older = createProject()
+    older.name = '旧项目'
+    older.updatedAt = '2026-01-01T00:00:00.000Z'
+    const newer = createProject()
+    newer.name = '新项目'
+    newer.updatedAt = '2026-01-02T00:00:00.000Z'
+    const storage = new Map<string, string>()
+    const api = {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => { storage.set(key, value) },
+      removeItem: (key: string) => { storage.delete(key) },
+      get length() { return storage.size },
+      key: (index: number) => [...storage.keys()][index] ?? null
+    }
+    saveProject(older, api)
+    saveProject(newer, api)
+
+    expect(listProjects(api).map((item) => item.name)).toEqual(['新项目', '旧项目'])
+    expect(deleteProject(newer.id, api).ok).toBe(true)
+    expect(listProjects(api).map((item) => item.name)).toEqual(['旧项目'])
   })
 })

@@ -45,7 +45,9 @@ export function getPromptTemplates(storage: Pick<Storage, 'getItem'> | null = ty
   const templates = JSON.parse(JSON.stringify(promptTemplates)) as typeof promptTemplates
   if (!storage) return templates
   try {
-    const raw = storage.getItem('ai-comic-workflow.prompts.v1') ?? '{}'
+    const raw = storage.getItem('ai-comic-workflow.prompts.v1')
+      ?? storage.getItem('adaptation-workbench.prompts.v1')
+      ?? '{}'
     const saved = JSON.parse(raw) as Partial<typeof promptTemplates>
     for (const key of Object.keys(templates) as PromptTemplateId[]) Object.assign(templates[key], saved[key] ?? {})
   } catch { /* Invalid overrides fall back to defaults. */ }

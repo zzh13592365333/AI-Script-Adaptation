@@ -1,5 +1,27 @@
+import type { QualityCheckResult, ScriptTaskStage, ScriptTaskStatus, ScriptVersion } from '@/features/script-tasks/types'
+
 export type NodeStatus = 'empty' | 'generating' | 'ready' | 'confirmed' | 'dirty' | 'error'
 export type StageId = 'source' | 'adaptation' | 'planning' | 'outlines' | 'scripts'
+export type ReviewableStageId = 'analysis' | 'adaptation' | 'planning' | 'outlines'
+export type StageReviewStatus = 'idle' | 'checking' | 'issues_found' | 'passed' | 'error'
+
+export interface StageVersion {
+  version: number
+  content: unknown
+  source: 'model' | 'human' | 'restored'
+  confirmed: boolean
+  createdAt: string
+}
+
+export interface StageReviewState {
+  status: StageReviewStatus
+  currentVersion: number
+  checkedVersion: number | null
+  issues: string[]
+  revisionInstructions: string[]
+  versions: StageVersion[]
+  error?: string
+}
 
 export interface ContentNode {
   status: NodeStatus
@@ -49,6 +71,16 @@ export interface EpisodeScript {
   status: NodeStatus
   partial: boolean
   summaryStale: boolean
+  taskId?: string
+  taskStatus?: ScriptTaskStatus
+  taskStage?: ScriptTaskStage
+  taskProgress?: number
+  retryCount?: number
+  maxRetries?: number
+  qualityCheck?: QualityCheckResult | null
+  versions?: ScriptVersion[]
+  taskErrorCode?: string | null
+  taskErrorMessage?: string | null
 }
 
 export interface Project {
@@ -63,7 +95,21 @@ export interface Project {
   planning: SeriesPlanning
   outlines: EpisodeOutline[]
   scripts: EpisodeScript[]
+  stageReviews: Record<ReviewableStageId, StageReviewState>
   overflow: { outlines: EpisodeOutline[]; scripts: EpisodeScript[] }
+}
+
+export function createStageReviewState(): StageReviewState {
+  return { status: 'idle', currentVersion: 0, checkedVersion: null, issues: [], revisionInstructions: [], versions: [] }
+}
+
+export function createStageReviews(): Project['stageReviews'] {
+  return {
+    analysis: createStageReviewState(),
+    adaptation: createStageReviewState(),
+    planning: createStageReviewState(),
+    outlines: createStageReviewState()
+  }
 }
 
 export function createOutline(episodeNumber: number): EpisodeOutline {
@@ -97,6 +143,7 @@ export function createProject(): Project {
     },
     outlines: Array.from({ length: episodeCount }, (_, index) => createOutline(index + 1)),
     scripts: Array.from({ length: episodeCount }, (_, index) => createScript(index + 1)),
+    stageReviews: createStageReviews(),
     overflow: { outlines: [], scripts: [] }
   }
 }

@@ -2,7 +2,7 @@ import { fileURLToPath, URL } from 'node:url'
 import vue from '@vitejs/plugin-vue'
 import { loadEnv } from 'vite'
 import { defineConfig } from 'vitest/config'
-import { openAiProxyPlugin } from './server/openai-proxy'
+import { openAiProxyPlugin } from './server/openai-proxy.ts'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
@@ -15,6 +15,15 @@ export default defineConfig(({ mode }) => {
     })],
     resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
     optimizeDeps: { entries: ['index.html'] },
+    server: {
+      proxy: {
+        '/backend-api': {
+          target: env.BACKEND_ORIGIN ?? 'http://127.0.0.1:8000',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/backend-api/, '')
+        }
+      }
+    },
     test: { environment: 'jsdom', globals: true, exclude: ['tests/e2e/**', 'node_modules/**', 'dist/**'] }
   }
 })
